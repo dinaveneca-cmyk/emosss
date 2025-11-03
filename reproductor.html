@@ -203,8 +203,8 @@
     const WORKER_URL = 'https://melonesvideo.dinaveneca.workers.dev/';
     const EXTRACTOR_PHP = 'extractor.php';
     const PROXY_PHP = 'proxy.php';
-    const USE_WORKER = false; // Desactivado por ahora (retorna 404)
-    const USE_PROXY = true; // Activar proxy para evitar 403
+    const USE_WORKER = false; // Desactivado por ahora
+    const USE_PROXY = true; // Activado para evitar 403
     const DEBUG_MODE = true;
     
     // ==========================================
@@ -214,8 +214,8 @@
     const embedUrl = decodeURIComponent(urlParams.get('iframe') || '');
     const channelName = decodeURIComponent(urlParams.get('name') || 'Canal Desconocido');
     
-    log('📺 Iniciando reproductor');
-    log('- Embed:', embedUrl);
+    log('📺 Parámetros recibidos:');
+    log('- Embed URL:', embedUrl);
     log('- Canal:', channelName);
     
     document.getElementById('channel-name').textContent = channelName;
@@ -228,7 +228,9 @@
       if (DEBUG_MODE) {
         const debugDiv = document.getElementById('debug-info');
         debugDiv.style.display = 'block';
-        const text = args.map(a => typeof a === 'object' ? JSON.stringify(a, null, 2) : a).join(' ');
+        const text = args.map(arg => 
+          typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
+        ).join(' ');
         debugDiv.innerHTML += text + '<br>';
         debugDiv.scrollTop = debugDiv.scrollHeight;
       }
@@ -282,39 +284,27 @@
         // MÉTODO 1: Worker (si está activado)
         if (USE_WORKER) {
           document.getElementById('loading-method').textContent = 'Método 1: Cloudflare Worker';
-          log('🚀 Método 1: Worker...');
+          log('🚀 Intentando Método 1: Worker...');
           
           const workerSuccess = await tryWorker(fullEmbedUrl);
           if (workerSuccess) {
-            log('✅ Cargado con Worker');
+            log('✅ Stream cargado con Worker');
             return;
           }
-          log('⚠️ Worker falló');
+          log('⚠️ Worker falló, probando Método 2...');
         }
         
-        // MÉTODO 2: Extractor.php
+        // MÉTODO 2: Extractor.php con parámetro 'iframe'
         document.getElementById('loading-method').textContent = 'Método 2: Extractor Local';
-        log('🔧 Método 2: Extractor...');
+        log('🔧 Intentando Método 2: Extractor...');
         
-        const videoUrl = await getVideoUrlFromExtractor(embedUrl);
-        
-        if (videoUrl) {
-          log('✅ URL obtenida:', videoUrl);
-          
-          // Cargar con o sin proxy según configuración
-          if (USE_PROXY) {
-            log('🔀 Usando proxy para evitar 403');
-            const proxiedUrl = `${PROXY_PHP}?url=${encodeURIComponent(videoUrl)}`;
-            await loadVideoUrl(proxiedUrl);
-          } else {
-            await loadVideoUrl(videoUrl);
-          }
-          
-          log('✅ Stream cargado exitosamente');
+        const extractorSuccess = await tryExtractor(embedUrl);
+        if (extractorSuccess) {
+          log('✅ Stream cargado con Extractor');
           return;
         }
         
-        throw new Error('No se pudo obtener la URL del video');
+        throw new Error('No se pudo extraer la URL del video');
         
       } catch (error) {
         log('❌ Error fatal:', error.message);
@@ -323,82 +313,32 @@
     }
     
     // ==========================================
-    // OBTENER URL DEL VIDEO DESDE EXTRACTOR
-    // ==========================================
-    async function getVideoUrlFromExtractor(embedUrl) {
-      try {
-        const url = `${EXTRACTOR_PHP}?iframe=${encodeURIComponent(embedUrl)}`;
-        log('📡 Llamando extractor:', url);
-        
-        const response = await fetch(url);
-        log('📊 Respuesta:', response.status);
-        
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-        
-        const data = await response.json();
-        log('📦 Data:', data);
-        
-        if (data.url && data.url !== '') {
-          return data.url;
-        } else if (data.error) {
-          throw new Error(data.error);
-        }
-        
-        return null;
-        
-      } catch (error) {
-        log('❌ Error en extractor:', error.message);
-        return null;
-      }
-    }
-    
-    // ==========================================
-    // INTENTAR CON WORKER
+    // MÉTODO 1: CLOUDFLARE WORKER
     // ==========================================
     async function tryWorker(embedUrl) {
       try {
-        const attempts = [
-          `${WORKER_URL}?url=${encodeURIComponent(embedUrl)}`,
-          `${WORKER_URL}?iframe=${encodeURIComponent(embedUrl)}`
-        ];
+        const url = `${WORKER_URL}?url=${encodeURIComponent(embedUrl)}`;
+        log('🌐 Worker URL:', url);
         
-        for (let i = 0; i < attempts.length; i++) {
-          const url = attempts[i];
-          log(`🌐 Worker intento ${i+1}:`, url);
-          
-          try {
-            const response = await fetch(url, {
-              method: 'GET',
-              headers: {
-                'Accept': 'application/json'
-              }
-            });
-            
-            log(`📊 Worker respuesta ${i+1}: ${response.status}`);
-            
-            if (response.ok) {
-              const contentType = response.headers.get('content-type');
-              
-              if (contentType && contentType.includes('application/json')) {
-                const data = await response.json();
-                log('📦 Worker JSON:', data);
-                
-                if (data.url && data.url !== '') {
-                  if (USE_PROXY) {
-                    const proxiedUrl = `${PROXY_PHP}?url=${encodeURIComponent(data.url)}`;
-                    await loadVideoUrl(proxiedUrl);
-                  } else {
-                    await loadVideoUrl(data.url);
-                  }
-                  return true;
-                }
-              }
-            }
-          } catch (err) {
-            log(`❌ Worker intento ${i+1} error:`, err.message);
+        const response = await fetch(url, {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json'
           }
+        });
+        
+        log('📊 Worker respuesta:', response.status);
+        
+        if (!response.ok) {
+          return false;
+        }
+        
+        const data = await response.json();
+        log('📦 Worker data:', data);
+        
+        if (data.url && data.url !== '') {
+          await loadVideoUrl(data.url, 'worker');
+          return true;
         }
         
         return false;
@@ -410,24 +350,70 @@
     }
     
     // ==========================================
+    // MÉTODO 2: EXTRACTOR.PHP
+    // ==========================================
+    async function tryExtractor(embedUrl) {
+      try {
+        const url = `${EXTRACTOR_PHP}?iframe=${encodeURIComponent(embedUrl)}`;
+        log('📡 Extractor URL:', url);
+        
+        const response = await fetch(url);
+        log('📊 Extractor respuesta:', response.status);
+        
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        
+        const data = await response.json();
+        log('📦 Extractor data:', data);
+        
+        if (data.url && data.url !== '') {
+          // Usar proxy si está activado
+          if (USE_PROXY) {
+            await loadVideoUrl(data.url, 'extractor_with_proxy');
+          } else {
+            await loadVideoUrl(data.url, 'extractor_direct');
+          }
+          return true;
+        } else if (data.error) {
+          log('⚠️ Extractor error:', data.error);
+        }
+        
+        return false;
+        
+      } catch (error) {
+        log('❌ Extractor error:', error.message);
+        return false;
+      }
+    }
+    
+    // ==========================================
     // CARGAR VIDEO EN EL PLAYER
     // ==========================================
-    async function loadVideoUrl(videoUrl) {
-      log('🎬 Cargando en player:', videoUrl);
+    async function loadVideoUrl(videoUrl, source) {
+      log('🎬 Cargando video:', videoUrl);
+      log('📍 Fuente:', source);
       
+      // Determinar tipo de video
       let videoType = 'video/mp4';
-      
-      // Detectar tipo de video
-      if (videoUrl.includes('.m3u8') || videoUrl.includes('proxy.php')) {
+      if (videoUrl.includes('.m3u8')) {
         videoType = 'application/x-mpegURL';
       } else if (videoUrl.includes('.mpd')) {
         videoType = 'application/dash+xml';
       }
       
-      log('📹 Tipo detectado:', videoType);
+      log('📹 Tipo:', videoType);
       
+      // Si usamos proxy, modificar la URL
+      let finalUrl = videoUrl;
+      if (USE_PROXY && (source === 'extractor_with_proxy' || source === 'worker')) {
+        finalUrl = `${PROXY_PHP}?url=${encodeURIComponent(videoUrl)}`;
+        log('🔀 URL con proxy:', finalUrl);
+      }
+      
+      // Configurar el source del player
       player.src({
-        src: videoUrl,
+        src: finalUrl,
         type: videoType
       });
       
@@ -454,40 +440,23 @@
         const error = player.error();
         log('❌ Player error:', error);
         
-        if (error) {
-          let errorMsg = 'Error al reproducir';
-          
-          switch(error.code) {
-            case 1:
-              errorMsg = 'Carga abortada';
-              break;
-            case 2:
-              errorMsg = 'Error de red';
-              break;
-            case 3:
-              errorMsg = 'Error de decodificación';
-              break;
-            case 4:
-              errorMsg = 'Formato no soportado o 403 Forbidden';
-              break;
-          }
-          
-          showError(errorMsg + ' (Código: ' + error.code + ')');
+        // Si falla con proxy, intentar sin proxy
+        if (USE_PROXY && source === 'extractor_with_proxy') {
+          log('🔄 Reintentando sin proxy...');
+          USE_PROXY = false;
+          player.src({
+            src: videoUrl,
+            type: videoType
+          });
+        } else {
+          showError('Error al reproducir: ' + (error ? error.message : 'Desconocido'));
         }
-      });
-      
-      player.on('waiting', function() {
-        log('⏸️ Buffering...');
-      });
-      
-      player.on('stalled', function() {
-        log('⚠️ Stream detenido');
       });
       
       // Intentar reproducir
       try {
         await player.play();
-        log('✅ Reproducción iniciada');
+        log('▶️ Autoplay iniciado');
       } catch (error) {
         log('ℹ️ Autoplay bloqueado, click para reproducir');
       }
@@ -551,7 +520,7 @@
       const errorDiv = document.getElementById('error-message');
       errorDiv.textContent = message;
       errorDiv.style.display = 'block';
-      log('🚨 Error:', message);
+      log('🚨 Error mostrado:', message);
     }
   </script>
 </body>
